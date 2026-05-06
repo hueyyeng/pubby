@@ -7,7 +7,9 @@ import os
 from PySide6.QtCore import *
 from PySide6.QtGui import *
 from PySide6.QtWidgets import *
-from pubby.workers import JobManager
+from datetime import datetime
+
+from pubby.workers import JobManager, HtmlExportRunnable
 
 # ---------------------------------------------------------------------------
 # Configuration & Constants
@@ -1015,20 +1017,11 @@ class FolderSection(QWidget):
         self._preset_combo.currentIndexChanged.connect(self._on_preset_changed)
 
         # In FolderSection.__init__, replace the job manager connection part with:
-        print(f"DEBUG FolderSection __init__: self.path = {self.path}")
-        print(f"DEBUG FolderSection __init__: self.parent_ = {self.parent_}")
-        print(f"DEBUG FolderSection __init__: hasattr(self.parent_, 'parent_') = {hasattr(self.parent_, 'parent_')}")
-
         if hasattr(self.parent_, 'parent_'):
-            print(f"DEBUG FolderSection __init__: self.parent_.parent_ = {self.parent_.parent_}")
             if hasattr(self.parent_.parent_, 'job_manager'):
                 job_manager = self.parent_.parent_.job_manager
-                print(f"DEBUG FolderSection __init__: Found job_manager: {job_manager}")
                 self.job_manager = job_manager
-                print(f"DEBUG FolderSection __init__: Connecting to file_updated signal")
                 self.job_manager.file_updated.connect(self._on_file_job_update)
-                # self.job_manager.file_completed.connect(self._on_file_job_complete)
-                print(f"DEBUG FolderSection __init__: Signal connected successfully")
             else:
                 print(f"DEBUG FolderSection __init__: parent_.parent_ has no job_manager attribute")
         else:
@@ -1064,12 +1057,8 @@ class FolderSection(QWidget):
 
     def _on_file_job_update(self, path: str, update_data: dict):
         """Slot called when a job for this file reports status/progress updates."""
-        print(f"DEBUG FolderSection: _on_file_job_update called with path={path}, data={update_data}")
-        print(f"DEBUG FolderSection: Self path = {self.path}")
-
         name_item = self._model._path_to_item.get(path)
         if not name_item:
-            print(f"DEBUG FolderSection: Could not find item for path in _path_to_item")
             return
 
         # Find the row
@@ -1082,8 +1071,6 @@ class FolderSection(QWidget):
         # Update Status Column
         if 'status' in update_data:
             new_status = update_data['status']
-            print(f"DEBUG FolderSection: Updating status to: {new_status}")
-
             status_item = parent_item.child(row, status_col)
             if status_item:
                 status_item.setText(new_status)
@@ -1102,8 +1089,6 @@ class FolderSection(QWidget):
         # Update Progress Column
         if 'progress' in update_data:
             progress_ratio = update_data['progress']
-            print(f"DEBUG FolderSection: Updating progress to: {progress_ratio}")
-
             progress_item = parent_item.child(row, progress_col)
             if progress_item:
                 progress_item.setData(progress_ratio, JOB_PROGRESS_ROLE)
@@ -1115,7 +1100,6 @@ class FolderSection(QWidget):
 
                 # Force view update
                 idx = self._model.index(row, progress_col)
-                print(f"DEBUG FolderSection: Emitting dataChanged for row {row}, col {progress_col}")
                 self._model.dataChanged.emit(idx, idx, [Qt.DisplayRole])
 
         # --- NEW: Recalculate Folder Progress ---
@@ -1150,7 +1134,6 @@ class FolderSection(QWidget):
             file_size = 0
             if size_item:
                 size_data = size_item.data(Qt.DisplayRole)
-                print(f"DEBUG FolderSection: Row {row} - Size item data: {size_data}, type: {type(size_data)}")
 
                 # Try to parse the size - handle both numeric and formatted strings
                 try:
@@ -1171,7 +1154,6 @@ class FolderSection(QWidget):
                         else:
                             # Try to parse as pure number
                             file_size = int(size_str.replace(',', ''))
-                    print(f"DEBUG FolderSection: Parsed file size for row {row}: {file_size} bytes")
                 except Exception as e:
                     print(f"DEBUG FolderSection: Error parsing size for row {row}: {e}")
                     file_size = 0
@@ -1184,10 +1166,8 @@ class FolderSection(QWidget):
                     path_data = path_item.data(Qt.UserRole) if path_item else None
                     if path_data and os.path.exists(path_data):
                         file_size = os.path.getsize(path_data)
-                        print(f"DEBUG FolderSection: Used filesystem size for row {row}: {file_size} bytes")
                     else:
                         file_size = 1024 * 1024  # Default 1MB weight
-                        print(f"DEBUG FolderSection: Using default weight for row {row}")
                 except Exception as e:
                     print(f"DEBUG FolderSection: Error getting filesystem size for row {row}: {e}")
                     file_size = 1024 * 1024  # Default 1MB weight
@@ -1198,15 +1178,11 @@ class FolderSection(QWidget):
             progress_item = root_item.child(row, COL_PROGRESS)
             if progress_item:
                 progress_ratio = progress_item.data(JOB_PROGRESS_ROLE)
-                print(f"DEBUG FolderSection: Row {row} - Progress ratio: {progress_ratio}, file_size: {file_size}")
-
                 if progress_ratio is not None and isinstance(progress_ratio,
                                                              (int, float)) and 0 <= progress_ratio <= 1.0:
                     transferred_size += file_size * progress_ratio
 
         # Calculate folder progress
-        print(f"DEBUG FolderSection: Total size: {total_size}, Transferred: {transferred_size}")
-
         if total_size > 0:
             folder_progress = min(transferred_size / total_size, 1.0)
         else:
@@ -1217,11 +1193,8 @@ class FolderSection(QWidget):
             else:
                 folder_progress = 0.0
 
-        print(f"DEBUG FolderSection: Final folder progress: {folder_progress * 100:.1f}%")
-
         # Update the UI progress bar
         progress_percent = int(folder_progress * 100)
-        print(f"DEBUG FolderSection: Setting progress bar value to: {progress_percent}")
         self._progress_bar.setValue(progress_percent)
 
     def _update_model_item_for_path(self, path: str, update_data: dict):
@@ -1478,7 +1451,79 @@ class DetailsPanel(QWidget):
         self._btn_cancel.clicked.connect(self._cancel_job)
         actions_layout.addWidget(self._btn_cancel)
 
+        self._btn_export_csv = QPushButton("Export CSV")
+        self._btn_export_csv.setFixedHeight(28)
+        self._btn_export_csv.setCursor(Qt.PointingHandCursor)
+        self._btn_export_csv.clicked.connect(self._export_csv)
+        actions_layout.addWidget(self._btn_export_csv)
+
         root_layout.addWidget(actions_group)
+
+        self._btn_export_html = QPushButton("Export HTML Report")
+        self._btn_export_html.setFixedHeight(28)
+        self._btn_export_html.setCursor(Qt.PointingHandCursor)
+        self._btn_export_html.clicked.connect(self._export_html)
+        actions_layout.addWidget(self._btn_export_html)
+
+    def _export_html(self):
+        from datetime import datetime
+        from PySide6.QtWidgets import QFileDialog, QProgressDialog
+
+        job_manager = self.parent_.job_manager
+
+        now = datetime.now()
+        default_filename = f"{now.strftime('%Y-%m-%d-%H%M%S')}-report.html"
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export HTML Report",
+            default_filename,
+            "HTML Files (*.html);;All Files (*)"
+        )
+
+        if file_path:
+            # 1. Create the progress dialog
+            progress_dialog = QProgressDialog("Generating report...", "Cancel", 0, 100, self)
+            progress_dialog.setWindowTitle("Exporting Report")
+            progress_dialog.setWindowModality(Qt.ApplicationModal)
+
+            # 2. Create the Runnable worker
+            worker = HtmlExportRunnable(job_manager, file_path)
+
+            # 3. Connect signals to update the UI
+            worker.signals.progress.connect(progress_dialog.setValue)
+
+            # FIXED: Capture both arguments (pct, msg) and pass only 'msg' to setLabelText
+            worker.signals.progress.connect(lambda pct, msg: progress_dialog.setLabelText(msg))
+
+            # When finished or error occurs, close the dialog
+            worker.signals.finished.connect(progress_dialog.close)
+            worker.signals.error.connect(progress_dialog.close)
+
+            # Allow user to cancel (just closes the dialog; background task will finish anyway)
+            progress_dialog.canceled.connect(progress_dialog.close)
+
+            # 4. Start the job in the global thread pool
+            QThreadPool.globalInstance().start(worker)
+
+    def _export_csv(self):
+        job_manager = self.parent_.job_manager
+
+        # 1. Generate default filename based on current time (e.g., 2023-10-27-1430-report.csv)
+        now = datetime.now()
+        default_filename = f"{now.strftime('%Y-%m-%d-%H%M%S')}-report.csv"
+
+        # 2. Open the "Save As" dialog
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export CSV Report",  # Window Title
+            default_filename,  # Default filename suggestion
+            "CSV Files (*.csv);;All Files (*)"  # File filter options
+        )
+
+        # 3. If user didn't cancel (file_path is not empty), execute the export
+        if file_path:
+            job_manager.export_csv(file_path)
 
     def update_job_title(self, job_manager: JobManager):
         """Updates the panel title and info when a new job is started."""
@@ -1576,8 +1621,7 @@ class DetailsPanel(QWidget):
                     if os.path.isfile(full_path):
                         files.append((item, full_path))
 
-                # For dry run, let's just process the first few files to test
-                files_to_process = files[:5]  # Limit to 5 files for debugging
+                files_to_process = files
 
                 for filename, source_file in files_to_process:
                     # Create destination path preserving relative structure
@@ -1667,7 +1711,7 @@ class DetailsPanel(QWidget):
 
 
 class StatusBar(QStatusBar):
-    def __init__(self, parent: PublisherDialog = None):
+    def __init__(self, parent: PublisherDialog):
         super().__init__(parent)
         self.parent_: PublisherDialog = parent
         self.setFixedHeight(28)

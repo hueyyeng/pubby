@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.14"
 dependencies = [
     "ffmpeg-python>=0.2.0",
+    "jinja2>=3.1.6",
     "pyside6>=6.11.0",
 ]
 

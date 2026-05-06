@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+
+import ffmpeg
 import os
 import json
 import subprocess
@@ -10,6 +12,105 @@ import shutil  # Import shutil for removing directories
 import hashlib
 from PySide6.QtCore import *  # Wildcard import as requested
 
+# Only probe these extensions to save time
+VIDEO_EXTENSIONS = {'.mp4', '.mov', '.insv', '.mxf', '.mkv'}
+
+
+def _calculate_md5(file_path, chunk_size=8192):
+    """Calculates MD5 hash of a file in chunks to prevent memory overflow on large files."""
+    md5 = hashlib.md5()
+    try:
+        with open(file_path, "rb") as f:
+            while True:
+                data = f.read(chunk_size)
+                if not data:
+                    break
+                md5.update(data)
+        return md5.hexdigest()
+    except Exception as e:
+        print(f"DEBUG HASHING: Could not hash file {file_path}: {e}")
+        return "Hash Error"
+
+
+def _format_bytes(size):
+    """Formats bytes into human-readable string (GB, MB, etc)."""
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size < 1024.0:
+            return f"{size:.2f} {unit}"
+        size /= 1024.0
+    return f"{size:.2f} PB"
+
+
+def _get_video_metadata(file_path):
+    """Extracts video metadata using ffmpeg-python."""
+
+    # 1. Check extension first to avoid probing non-video files (like .jpg, .png)
+    ext = os.path.splitext(file_path)[1].lower()
+    VIDEO_EXTENSIONS = {'.mp4', '.mov', '.insv', '.mxf', '.mkv'}
+
+    if ext not in VIDEO_EXTENSIONS:
+        return {
+            'duration': 0,
+            'resolution': 'N/A',
+            'fps': 0,
+            'format': ext.upper()  # e.g., .JPG, .PNG
+        }
+
+    try:
+        # 2. Add a timeout (5 seconds) to prevent ffmpeg from hanging on corrupt/weird files
+        probe = ffmpeg.probe(file_path, timeout=5)
+
+        # Find the video stream
+        video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
+
+        if not video_stream:
+            return {
+                'duration': 0,
+                'resolution': 'N/A',
+                'fps': 0,
+                'format': ext.upper()
+            }
+
+        # Extract resolution and FPS
+        width = video_stream.get('width', 0)
+        height = video_stream.get('height', 0)
+
+        # Parse FPS (it can be a string like "25/1" or an int)
+        r_frame_rate = video_stream.get('r_frame_rate', '0')
+        if '/' in str(r_frame_rate):
+            try:
+                fps = eval(str(r_frame_rate))  # Safely evaluate fraction string like "24000/1001"
+            except:
+                fps = 0
+        else:
+            fps = float(r_frame_rate)
+
+        # Extract Duration (from format section, usually more accurate for total file duration)
+        duration_secs = float(probe['format'].get('duration', 0))
+
+        return {
+            'duration': duration_secs,
+            'resolution': f"{width}x{height}",
+            'fps': fps,
+            'format': ext.upper()
+        }
+    except Exception as e:
+        print(f"DEBUG METADATA: Could not extract metadata from {file_path}: {e}")
+        return {'duration': 0, 'resolution': 'N/A', 'fps': 0, 'format': ext.upper()}
+
+
+def _format_duration(seconds):
+    """Formats seconds into HH:MM:SS or MM:SS format."""
+    if not seconds: return "0s"
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d} h"
+    else:
+        return f"{minutes}:{secs:02d} min"
+
 
 # ---------------------------------------------------------------------------
 # Real Job Signals & Class
@@ -18,7 +119,7 @@ from PySide6.QtCore import *  # Wildcard import as requested
 class FileCopyJobSignals(QObject):
     started = Signal(str)
     updated = Signal(str, dict)
-    completed = Signal(str)
+    completed = Signal(str, dict)  # Changed: now takes (path, metadata_dict)
     error = Signal(str, str)
 
 
@@ -53,6 +154,12 @@ class FileCopyJob(QRunnable):
             try:
                 total_size = os.path.getsize(self.source_path)
                 print(f"DEBUG FILE COPY: Total size for {self.source_path}: {total_size} bytes")
+
+                # NEW: Record start time and calculate hash
+                start_time = time.time()
+                file_hash = _calculate_md5(self.source_path)
+                video_meta = _get_video_metadata(self.source_path)
+
             except OSError as e:
                 self.signals.error.emit(self.source_path, f"Could not get file size: {e}")
                 return
@@ -107,7 +214,16 @@ class FileCopyJob(QRunnable):
                         'status': 'Complete'
                     }
                 )
-                self.signals.completed.emit(self.source_path)
+
+                # NEW: Emit metadata along with path
+                self.signals.completed.emit(self.source_path, {
+                    'size': total_size,
+                    'start_time': start_time,
+                    'hash': file_hash,
+                    'dest_path': self.dest_path,
+                    'video_meta': video_meta  # <--- ADDED
+                })
+
             else:
                 stderr_output = process.stderr.read().strip()
                 self.signals.error.emit(
@@ -128,7 +244,7 @@ class FileCopyJob(QRunnable):
 class FakeCopyJobSignals(QObject):
     started = Signal(str)
     updated = Signal(str, dict)
-    completed = Signal(str)
+    completed = Signal(str, dict)  # Changed: now takes (path, metadata_dict)
     error = Signal(str, str)
 
 
@@ -191,6 +307,11 @@ class FakeCopyJob(QRunnable):
             try:
                 total_size = os.path.getsize(self.source_path)
                 print(f"DEBUG FAKE COPY: Total size for {self.source_path}: {total_size} bytes")
+
+                # NEW: Record start time and calculate hash
+                start_time = time.time()
+                file_hash = _calculate_md5(self.source_path)
+                video_meta = _get_video_metadata(self.source_path)
             except OSError as e:
                 self.signals.error.emit(self.source_path, f"Could not get file size: {e}")
                 return
@@ -266,7 +387,14 @@ class FakeCopyJob(QRunnable):
             )
 
             # 2. Emit the completion signal (so other listeners like JobManager know it's done)
-            self.signals.completed.emit(self.source_path)
+            self.signals.completed.emit(self.source_path, {
+                'size': total_size,
+                'start_time': start_time,
+                'hash': file_hash,
+                'dest_path': self.dest_path,
+                'video_meta': video_meta  # <--- ADDED
+            })
+
             print(f"DEBUG FAKE COPY: Completed fake job for {self.source_path}")
 
         except Exception as e:
@@ -303,8 +431,8 @@ class JobManager(QObject):
         self.thread_pool = QThreadPool.globalInstance()
         self.active_jobs: dict[str, FileCopyJob | FakeCopyJob] = {}
         self.dry_run = False
-        self.network_speed_gbps = 1.0
-        self.completed_files: dict[str, str] = {}  # source_path -> status
+        self.network_speed_gbps = 10.0
+        self.completed_files: dict[str, dict] = {}  # source_path -> status
 
         self._folder_sizes: dict[str, int] = {}  # folder_path -> total bytes in folder
         self._folder_completed_bytes: dict[str, int] = {}  # folder_path -> completed bytes
@@ -366,27 +494,21 @@ class JobManager(QObject):
         self.job_progress.emit(source_path, progress, speed)
         self.file_updated.emit(source_path, {'status': 'Copying', 'progress': progress, 'speed': speed})
 
-    @Slot(str)
-    def _on_completed(self, source_path: str):
-        print(f"DEBUG JobManager: _on_completed called for {source_path}")
+    @Slot(str, dict)  # Updated signature to accept metadata dict
+    def _on_completed(self, source_path: str, metadata: dict):
 
         if source_path in self.active_jobs:
             del self.active_jobs[source_path]
-            print(f"DEBUG JobManager: Removed from active_jobs")
 
-        # Track completed file
-        self.completed_files[source_path] = "success"
-        print(f"DEBUG JobManager: Added to completed_files: {source_path} -> success")
+        metadata['source_folder'] = os.path.dirname(source_path)
+        # Track completed file with rich data instead of just string status
+        self.completed_files[source_path] = metadata
 
-        # Update folder-level progress
+        # Update folder-level progress (Existing logic)
         folder_path = os.path.dirname(source_path)
         if folder_path in self._folder_sizes:
             try:
-                file_size = 0
-                try:
-                    file_size = os.path.getsize(source_path)
-                except OSError:
-                    pass
+                file_size = metadata.get('size', 0)  # Use size from metadata
 
                 if folder_path not in self._folder_completed_bytes:
                     self._folder_completed_bytes[folder_path] = 0
@@ -456,6 +578,271 @@ class JobManager(QObject):
         self.network_speed_gbps = gbps
         self.network_speed_changed.emit(gbps)
 
-    def get_completed_files(self) -> dict[str, str]:
+    def get_completed_files(self) -> dict[str, dict]:
         """Returns a dictionary of completed files with their status."""
         return self.completed_files.copy()
+
+    def export_csv(self, file_path: str):
+        """Exports completed files data to a CSV report."""
+        import csv
+        from datetime import datetime
+
+        if not self.completed_files:
+            print("No completed files to export.")
+            return
+
+        try:
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+
+                # Updated Header Row to include Source Folder
+                writer.writerow([
+                    "Name",
+                    "Source Folder",  # <--- ADDED COLUMN
+                    "File Type",
+                    "File Size",
+                    "Creation Date",
+                    "Hash Values",
+                    "Volumes",
+                    "Verification State"
+                ])
+
+                for source_path, data in self.completed_files.items():
+                    size_bytes = data.get('size', 0)
+                    start_time = data.get('start_time', 0)
+                    file_hash = data.get('hash', 'N/A')
+                    dest_volume = data.get('dest_path', 'Unknown Volume')
+
+                    # --- NEW CODE START ---
+                    source_folder = data.get('source_folder', 'Unknown Folder')
+                    # --- NEW CODE END ---
+
+                    try:
+                        ctime = os.path.getctime(source_path)
+                        creation_date_str = datetime.fromtimestamp(ctime).strftime("%Y-%m-%d %H:%M")
+                    except Exception:
+                        creation_date_str = "N/A"
+
+                    try:
+                        start_date_str = datetime.fromtimestamp(start_time).strftime("%Y-%m-%d %H:%M")
+                    except Exception:
+                        start_date_str = "N/A"
+
+                    filename = os.path.basename(source_path)
+                    _, ext = os.path.splitext(filename)
+
+                    verification_state = "verified" if file_hash != "Hash Error" else "error"
+
+                    # Updated Row to include Source Folder
+                    writer.writerow([
+                        filename,
+                        source_folder,  # <--- ADDED COLUMN DATA
+                        ext.upper(),
+                        _format_bytes(size_bytes),
+                        creation_date_str,
+                        file_hash,
+                        dest_volume,
+                        verification_state
+                    ])
+
+            print(f"DEBUG JobManager: CSV exported successfully to {file_path}")
+        except Exception as e:
+            print(f"ERROR JobManager: Failed to export CSV: {e}")
+
+    def export_html(self, file_path: str, progress_callback=None):
+        """Generates an HTML report using Jinja2."""
+        from jinja2 import Template
+        from datetime import datetime
+
+        if not self.completed_files:
+            print("No completed files to export.")
+            return
+
+        try:
+            # Define video extensions to distinguish clips from other files
+            VIDEO_EXTENSIONS = {'.mp4', '.mov', '.insv', '.mxf', '.mkv'}
+
+            # --- PROGRESS UPDATE 1 ---
+            if progress_callback: progress_callback(10, "Aggregating metadata...")
+
+            folder_data = {}
+
+            for source_path, data in self.completed_files.items():
+                folder_name = os.path.basename(data.get('source_folder', 'Unknown'))
+
+                if folder_name not in folder_data:
+                    folder_data[folder_name] = {
+                        'files': [],
+                        'total_clips': 0,  # Only video files
+                        'total_files': 0,  # All files
+                        'total_duration_secs': 0,
+                        'total_size_bytes': 0
+                    }
+
+                video_meta = data.get('video_meta', {})
+                size = data.get('size', 0)
+                duration = video_meta.get('duration', 0)
+
+                # Get the file extension to determine if it's a clip
+                ext = os.path.splitext(source_path)[1].lower()
+
+                # Increment total files count for EVERY file
+                folder_data[folder_name]['total_files'] += 1
+
+                # Only increment clips count if it matches our video extensions
+                if ext in VIDEO_EXTENSIONS:
+                    folder_data[folder_name]['total_clips'] += 1
+
+                folder_data[folder_name]['files'].append({
+                    'name': os.path.basename(source_path),
+                    'size': _format_bytes(size),
+                    'duration': _format_duration(duration),
+                    'resolution': video_meta.get('resolution', 'N/A'),
+                    'fps': video_meta.get('fps', 0),
+                    'format': video_meta.get('format', 'UNKNOWN'),
+                    'hash': data.get('hash', 'N/A')
+                })
+
+                folder_data[folder_name]['total_duration_secs'] += duration
+                folder_data[folder_name]['total_size_bytes'] += size
+
+            # --- PROGRESS UPDATE 2 ---
+            if progress_callback: progress_callback(40, "Sorting folders...")
+
+            sorted_folders = dict(sorted(folder_data.items()))
+
+            # --- PROGRESS UPDATE 3 ---
+            if progress_callback: progress_callback(60, "Rendering HTML template...")
+
+            # Updated Template with new columns and renamed headers
+            template_str = """
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <title>Offload Report</title>
+                <style>
+                    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 40px; color: #333; }
+                    h1 { border-bottom: 2px solid #eee; padding-bottom: 10px; }
+                    .report-meta { color: #666; font-size: 0.9em; margin-bottom: 30px; }
+                    table { width: 100%; border-collapse: collapse; margin-bottom: 40px; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+                    th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #ddd; }
+                    th { background-color: #f8f9fa; font-weight: 600; color: #333; }
+                    tr:hover { background-color: #f1f1f1; }
+                    .folder-header { background-color: #e9ecef !important; font-weight: bold; }
+                </style>
+            </head>
+            <body>
+                <h1>Offload Report</h1>
+                <div class="report-meta">Generated on {{ report_date }}</div>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Source Folder</th>
+                            <th>Clips</th>
+                            <th>Duration</th> <!-- Renamed from Total Duration -->
+                            <th>Files</th>   <!-- New Column -->
+                            <th>Size</th>    <!-- Renamed from Total Size -->
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for folder_name, data in folders.items() %}
+                        <tr class="folder-header">
+                            <td>{{ folder_name }}</td>
+                            <td>{{ data.total_clips }}</td>
+                            <td>{{ _format_duration(data.total_duration_secs) }}</td>
+                            <td>{{ data.total_files }}</td> <!-- New Data -->
+                            <td>{{ _format_bytes(data.total_size_bytes) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+
+                <h2>Detailed Clip List</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Format</th>
+                            <th>Resolution</th>
+                            <th>FPS</th>
+                            <th>Duration</th>
+                            <th>Size</th>
+                            <th>Hash (xxHash64BE)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for folder_name, data in folders.items() %}
+                            {% for file in data.files %}
+                            <tr>
+                                <td>{{ file.name }}</td>
+                                <td>{{ file.format }}</td>
+                                <td>{{ file.resolution }}</td>
+                                <td>{{ file.fps }}</td>
+                                <td>{{ file.duration }}</td>
+                                <td>{{ file.size }}</td>
+                                <td style="font-family: monospace; font-size: 0.85em;">{{ file.hash }}</td>
+                            </tr>
+                            {% endfor %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </body>
+            </html>
+            """
+
+            template = Template(template_str)
+
+            html_content = template.render(
+                report_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
+                folders=sorted_folders,
+                _format_bytes=_format_bytes,
+                _format_duration=_format_duration
+            )
+
+            # --- PROGRESS UPDATE 4 ---
+            if progress_callback: progress_callback(90, "Saving to disk...")
+
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+
+            print(f"DEBUG JobManager: HTML Report exported successfully to {file_path}")
+
+        except Exception as e:
+            import traceback
+            print(f"ERROR JobManager: Failed to export HTML report: {e}")
+            traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
+# HTML Export Runnable (Background Task)
+# ---------------------------------------------------------------------------
+
+class HtmlExportRunnableSignals(QObject):
+    progress = Signal(int, str)
+    finished = Signal()
+    error = Signal(str)
+
+
+class HtmlExportRunnable(QRunnable):
+    def __init__(self, job_manager, file_path):
+        super().__init__()
+        self.setAutoDelete(True)  # Important: lets the thread pool clean it up after finish
+        self.job_manager = job_manager
+        self.file_path = file_path
+        self.signals = HtmlExportRunnableSignals()
+
+    def run(self):
+        try:
+            # Pass the progress signal as a callback to the export method
+            self.job_manager.export_html(
+                self.file_path,
+                progress_callback=self.signals.progress.emit
+            )
+            self.signals.finished.emit()
+        except Exception as e:
+            import traceback
+            print(f"ERROR HtmlExportRunnable: Failed to export HTML report: {e}")
+            traceback.print_exc()
+            self.signals.error.emit(str(e))
