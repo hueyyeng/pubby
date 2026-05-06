@@ -124,12 +124,13 @@ class FileCopyJobSignals(QObject):
 
 
 class FileCopyJob(QRunnable):
-    def __init__(self, source_path: str, dest_path: str, job_id: str):
+    def __init__(self, source_path: str, dest_path: str, job_id: str, is_dry_run: bool = False):
         super().__init__()
         self.setAutoDelete(True)
         self.source_path = source_path
         self.dest_path = dest_path
         self.job_id = job_id
+        self.is_dry_run = is_dry_run  # <--- ADDED
         self.signals = FileCopyJobSignals()
 
     def run(self):
@@ -140,8 +141,11 @@ class FileCopyJob(QRunnable):
                 "rclone", "copyto",
                 self.source_path,
                 self.dest_path,
-                "--json", "--log-level=INFO", "--stats=1s"
+                "--use-json-log", "--log-level=INFO", "--stats=1s"  # <--- NEW FLAGS
             ]
+            if self.is_dry_run:
+                cmd.append("--dry-run")  # <--- ADDED
+                print(f"DEBUG CMD: {cmd}")  # <--- ADD THIS LINE
 
             process = subprocess.Popen(
                 cmd,
@@ -169,33 +173,39 @@ class FileCopyJob(QRunnable):
             throttle_interval = 0.15
 
             while True:
-                line = process.stdout.readline()
+                # READ FROM STDERR (as discussed previously)
+                line = process.stderr.readline()
                 if not line:
                     break
 
                 try:
                     data = json.loads(line.strip())
-                    transferred_bytes = data.get('bytesTransferred', 0)
-                    speed_bps = data.get('speed', 0)
 
-                    if transferred_bytes != current_transferred:
-                        current_transferred = current_transferred
+                    # Check if this line contains stats (ignoring other log messages)
+                    if 'stats' in data:
+                        stats = data['stats']
+                        transferred_bytes = stats.get('bytes', 0)
+                        speed_bps = stats.get('speed', 0)
 
-                        if total_size > 0:
-                            progress_ratio = min(current_transferred / total_size, 1.0)
-                        else:
-                            progress_ratio = 1.0 if current_transferred > 0 else 0
+                        if transferred_bytes != current_transferred:
+                            # FIX BUG HERE: actually update the counter!
+                            current_transferred = transferred_bytes
 
-                        now = time.time()
-                        if now - last_emit_time >= throttle_interval:
-                            self.signals.updated.emit(
-                                self.source_path,
-                                {
-                                    'progress': progress_ratio,
-                                    'speed': speed_bps
-                                }
-                            )
-                            last_emit_time = now
+                            if total_size > 0:
+                                progress_ratio = min(current_transferred / total_size, 1.0)
+                            else:
+                                progress_ratio = 1.0 if current_transferred > 0 else 0
+
+                            now = time.time()
+                            if now - last_emit_time >= throttle_interval:
+                                self.signals.updated.emit(
+                                    self.source_path,
+                                    {
+                                        'progress': progress_ratio,
+                                        'speed': speed_bps
+                                    }
+                                )
+                                last_emit_time = now
 
                 except json.JSONDecodeError:
                     continue
@@ -226,6 +236,7 @@ class FileCopyJob(QRunnable):
 
             else:
                 stderr_output = process.stderr.read().strip()
+                print(f"DEBUG RCLONE ERROR: {stderr_output}")  # <--- ADD THIS LINE
                 self.signals.error.emit(
                     self.source_path,
                     f"rclone exited with code {process.returncode}: {stderr_output}"
@@ -430,7 +441,7 @@ class JobManager(QObject):
         super().__init__(parent)
         self.thread_pool = QThreadPool.globalInstance()
         self.active_jobs: dict[str, FileCopyJob | FakeCopyJob] = {}
-        self.dry_run = False
+        self.dry_run_mode = 0  # 0 = Real Copy, 1/2 = Simulated (1Gbps/10Gbps), 3 = Rclone Dry Run
         self.network_speed_gbps = 10.0
         self.completed_files: dict[str, dict] = {}  # source_path -> status
 
@@ -457,22 +468,24 @@ class JobManager(QObject):
                 print(f"Error calculating folder size for {folder_path}: {e}")
                 return
 
-        job_id = f"job_{source_path}" if not self.dry_run else f"fake_job_{source_path}"
+        is_dry_run = self.dry_run_mode > 0
+        job_id = f"job_{source_path}" if not is_dry_run else f"dry_job_{source_path}"
 
-        if self.dry_run:
+        if self.dry_run_mode == 3:
+            # Rclone Dry Run Mode
+            job = FileCopyJob(source_path, dest_path, job_id, is_dry_run=True)
+        elif self.dry_run_mode > 0:
+            # Simulated Dry Run Mode (1 Gbps or 10 Gbps)
             job = FakeCopyJob(source_path, dest_path, job_id, self.network_speed_gbps)
-            # Connect fake job signals using the .signals object
-            job.signals.started.connect(self._on_started)
-            job.signals.updated.connect(self._on_updated)
-            job.signals.completed.connect(self._on_completed)
-            job.signals.error.connect(self._on_error)
         else:
+            # Real Copy Mode
             job = FileCopyJob(source_path, dest_path, job_id)
-            # Connect real job signals using the .signals object
-            job.signals.started.connect(self._on_started)
-            job.signals.updated.connect(self._on_updated)
-            job.signals.completed.connect(self._on_completed)
-            job.signals.error.connect(self._on_error)
+
+        # Connect job signals using the .signals object
+        job.signals.started.connect(self._on_started)
+        job.signals.updated.connect(self._on_updated)
+        job.signals.completed.connect(self._on_completed)
+        job.signals.error.connect(self._on_error)
 
         self.active_jobs[source_path] = job
         self.thread_pool.start(job)
@@ -569,9 +582,9 @@ class JobManager(QObject):
         display_error = f"Error: {error_msg[:50]}" if len(error_msg) > 50 else f"Error: {error_msg}"
         self.file_updated.emit(source_path, {'status': display_error, 'progress': -1.0, 'speed': 0})
 
-    def set_dry_run(self, enabled: bool):
-        """Enable or disable dry run mode."""
-        self.dry_run = enabled
+    def set_dry_run_mode(self, mode: int):
+        """Set the dry run mode. 0 = real copy, >0 = simulated or rclone dry run."""
+        self.dry_run_mode = mode
 
     def set_network_speed(self, gbps: float):
         """Set the simulated network speed for dry run mode."""

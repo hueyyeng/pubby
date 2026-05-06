@@ -1769,17 +1769,21 @@ class PublisherDialog(QDialog):
         self.speed_1gbps = QRadioButton("1 Gbps")
         self.speed_10gbps = QRadioButton("10 Gbps")
         self.speed_10gbps.setChecked(True)  # Default to higher speed
+        self.rclone_dry = QRadioButton("Rclone")
 
         top_row.addWidget(self.speed_1gbps)
         top_row.addWidget(self.speed_10gbps)
+        top_row.addWidget(self.rclone_dry)
 
         self.speed_group.addButton(self.speed_1gbps, 1)
         self.speed_group.addButton(self.speed_10gbps, 2)
+        self.speed_group.addButton(self.rclone_dry, 3)
         self.speed_group.buttonClicked.connect(self._on_speed_changed)
 
         # Initially hide radio buttons since dry run is unchecked
         self.speed_1gbps.setVisible(False)
         self.speed_10gbps.setVisible(False)
+        self.rclone_dry.setVisible(False)
 
         top_row.addStretch()
         root.addLayout(top_row)
@@ -1811,21 +1815,38 @@ class PublisherDialog(QDialog):
 
     def _on_dry_run_toggled(self, state):
         is_checked = self.dry_run_checkbox.isChecked()
-        self.job_manager.set_dry_run(is_checked)
-
-        # Show/hide speed radio buttons based on dry run state
-        self.speed_1gbps.setVisible(is_checked)
-        self.speed_10gbps.setVisible(is_checked)
 
         if is_checked:
+            # Show radio buttons
+            self.speed_1gbps.setVisible(True)
+            self.speed_10gbps.setVisible(True)
+            self.rclone_dry.setVisible(True)
+
+            # Apply the currently selected radio button's settings immediately
+            checked_button = self.speed_group.checkedButton()
+            if checked_button:
+                self._on_speed_changed(checked_button)
+
             self.status_bar.showMessage("Dry Run mode enabled - simulating file copies")
         else:
+            # Hide radio buttons and disable dry run mode (set to 0)
+            self.speed_1gbps.setVisible(False)
+            self.speed_10gbps.setVisible(False)
+            self.rclone_dry.setVisible(False)
+
+            self.job_manager.set_dry_run_mode(0)
             self.status_bar.showMessage("Live mode enabled - actual file copies will be performed")
 
     def _on_speed_changed(self, button):
         if button == self.speed_1gbps:
+            self.job_manager.set_dry_run_mode(1)
             self.job_manager.set_network_speed(1.0)
             self.status_bar.showMessage("Network speed set to 1 Gbps (Dry Run)")
         elif button == self.speed_10gbps:
+            self.job_manager.set_dry_run_mode(2)
             self.job_manager.set_network_speed(10.0)
             self.status_bar.showMessage("Network speed set to 10 Gbps (Dry Run)")
+        elif button == self.rclone_dry:
+            # This sets the mode to 3, which triggers the Rclone --dry-run logic in workers.py
+            self.job_manager.set_dry_run_mode(3)
+            self.status_bar.showMessage("Using Rclone --dry-run flags (Dry Run)")
