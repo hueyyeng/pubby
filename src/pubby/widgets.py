@@ -9,7 +9,8 @@ from PySide6.QtGui import *
 from PySide6.QtWidgets import *
 from datetime import datetime
 
-from pubby.workers import JobManager, HtmlExportRunnable
+from pubby.workers import JobManager
+from pubby.reports import HtmlExportRunnable
 
 # ---------------------------------------------------------------------------
 # Configuration & Constants
@@ -102,41 +103,10 @@ def make_thumbnail_pixmap(path: str, size: int = 48) -> QPixmap | None:
     return pixmap.scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
 
 
-def format_size(num_bytes: int) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if num_bytes < 1024:
-            return f"{num_bytes:.1f} {unit}"
-        num_bytes /= 1024
-    return f"{num_bytes:.1f} PB"
+from pubby.utils import format_size
 
 
-def format_duration(seconds: float) -> str:
-    """Formats seconds into a human-readable duration string (e.g., 5h 23m)."""
-    if seconds <= 0:
-        return "N/A"
-
-    days = int(seconds // 86400)
-    hours = int((seconds % 86400) // 3600)
-    minutes = int((seconds % 3600) // 60)
-
-    parts = []
-    if days > 0:
-        parts.append(f"{days}d")
-    if hours > 0:
-        parts.append(f"{hours}h")
-    if minutes > 0 or not parts:  # Always show minutes if no other units
-        parts.append(f"{minutes}m")
-
-    return " ".join(parts)
-
-
-def format_speed(bytes_per_sec: float) -> str:
-    """Formats bytes per second into MB/s."""
-    if bytes_per_sec <= 0:
-        return "N/A"
-
-    mbps = bytes_per_sec / (1024 * 1024)
-    return f"{mbps:.2f} MB/sec"
+from pubby.utils import format_duration, format_speed
 
 
 def get_folder_size(path: str) -> int:
