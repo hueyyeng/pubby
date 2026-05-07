@@ -281,10 +281,29 @@ class DropZone(QWidget):
         self.setMinimumHeight(120)
         self.setAcceptDrops(False)
         self.setCursor(Qt.PointingHandCursor)
+        self._hovered = False
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+
+        if self._hovered:
+            palette = self.palette()
+            # Light overlay on hover using the window/brush color at 15% opacity
+            hover_color = palette.color(QPalette.Window)
+            hover_alpha = int(hover_color.alpha() * 0.15)
+            painter.fillRect(self.rect(), QColor(hover_color.red(), hover_color.green(), hover_color.blue(), hover_alpha))
+
         pen = QPen(Qt.gray, 1.5, Qt.DashLine)
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
@@ -310,6 +329,7 @@ class FolderCard(QWidget):
         self.path = path
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setToolTip(path)
+        self._hovered = False
         outer = QHBoxLayout(self)
         outer.setContentsMargins(6, 6, 4, 6)
         outer.setSpacing(8)
@@ -343,6 +363,33 @@ class FolderCard(QWidget):
         remove_btn.clicked.connect(lambda: self.removed.emit(self.path))
         outer.addWidget(remove_btn, alignment=Qt.AlignTop)
 
+        # Enable hover tracking
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_Hover, True)
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        if self._hovered:
+            palette = self.palette()
+            hover_color = palette.color(QPalette.Window)
+            hover_alpha = int(hover_color.alpha() * 0.15)
+            painter.fillRect(self.rect(), QColor(hover_color.red(), hover_color.green(), hover_color.blue(), hover_alpha))
+
+        painter.setPen(Qt.NoPen)
+        painter.end()
+
     def set_size(self, num_bytes: int):
         self._resolved_size = num_bytes
         if num_bytes < 0:
@@ -367,6 +414,7 @@ class SourcePanel(QWidget):
         self._folders: list[str] = []
         self.setAcceptDrops(True)
         self._pending_count = 0
+        self._hovered = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
@@ -388,7 +436,9 @@ class SourcePanel(QWidget):
         add_btn.setCursor(Qt.PointingHandCursor)
         add_btn.clicked.connect(self._browse)
         header_row.addWidget(add_btn)
-        root.addLayout(header_row)
+        # Enable hover tracking on the panel itself
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_Hover, True)
 
         self._total_label = QLabel("")
         small_font = QFont()
@@ -413,6 +463,29 @@ class SourcePanel(QWidget):
         self._scroll.setWidget(self._card_container)
         root.addWidget(self._scroll)
         root.addStretch()
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        if self._hovered:
+            palette = self.palette()
+            hover_color = palette.color(QPalette.Window)
+            hover_alpha = int(hover_color.alpha() * 0.15)
+            painter.fillRect(self.rect(), QColor(hover_color.red(), hover_color.green(), hover_color.blue(), hover_alpha))
+
+        painter.setPen(Qt.NoPen)
+        painter.end()
 
     def _update_header(self):
         count = len(self._folders)
