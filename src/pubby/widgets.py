@@ -396,10 +396,6 @@ class SourcePanel(QWidget):
         self.parent_: PublisherDialog = parent
         self._folders: list[str] = []
         self.setAcceptDrops(True)
-        self.setAutoFillBackground(True)
-        p = self.palette()
-        p.setColor(self.backgroundRole(), QColor("#ADD8E6"))
-        self.setPalette(p)
         self._pending_count = 0
 
         root = QVBoxLayout(self)
@@ -1290,10 +1286,6 @@ class FileListPanel(QWidget):
         super().__init__(parent)
         self.parent_: PublisherDialog = parent
         self._folders: set[str] = set()
-        self.setAutoFillBackground(True)
-        p = self.palette()
-        p.setColor(self.backgroundRole(), QColor("#FFFACD"))
-        self.setPalette(p)
 
         root = QVBoxLayout(self)
         root.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -1715,10 +1707,6 @@ class StatusBar(QStatusBar):
         super().__init__(parent)
         self.parent_: PublisherDialog = parent
         self.setFixedHeight(28)
-        self.setAutoFillBackground(True)
-        p = self.palette()
-        p.setColor(self.backgroundRole(), QColor("#FFB6C1"))
-        self.setPalette(p)
         self.showMessage("Ready.")
 
 
