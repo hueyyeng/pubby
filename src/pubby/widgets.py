@@ -281,29 +281,10 @@ class DropZone(QWidget):
         self.setMinimumHeight(120)
         self.setAcceptDrops(False)
         self.setCursor(Qt.PointingHandCursor)
-        self._hovered = False
-
-    def enterEvent(self, event):
-        self._hovered = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._hovered = False
-        self.update()
-        super().leaveEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-
-        if self._hovered:
-            palette = self.palette()
-            # Light overlay on hover using the window/brush color at 15% opacity
-            hover_color = palette.color(QPalette.Window)
-            hover_alpha = int(hover_color.alpha() * 0.15)
-            painter.fillRect(self.rect(), QColor(hover_color.red(), hover_color.green(), hover_color.blue(), hover_alpha))
-
         pen = QPen(Qt.gray, 1.5, Qt.DashLine)
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
@@ -329,7 +310,6 @@ class FolderCard(QWidget):
         self.path = path
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setToolTip(path)
-        self._hovered = False
         outer = QHBoxLayout(self)
         outer.setContentsMargins(6, 6, 4, 6)
         outer.setSpacing(8)
@@ -363,9 +343,23 @@ class FolderCard(QWidget):
         remove_btn.clicked.connect(lambda: self.removed.emit(self.path))
         outer.addWidget(remove_btn, alignment=Qt.AlignTop)
 
-        # Enable hover tracking
+        # Enable hover tracking on the card itself
         self.setMouseTracking(True)
         self.setAttribute(Qt.WA_Hover, True)
+        self._hovered = False
+
+        # Install event filter on all child widgets so mouse events
+        # propagate through to the parent FolderCard for hover detection.
+        for child in self.findChildren(QWidget):
+            if child is not remove_btn:
+                child.setAttribute(Qt.WA_TransparentForMouseEvents)
+                child.installEventFilter(self)
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        # Forward mouse move/enter/leave events to the parent for hover tracking
+        if event.type() in (QEvent.MouseMove, QEvent.Enter, QEvent.Leave):
+            self.update()
+        return super().eventFilter(obj, event)
 
     def enterEvent(self, event):
         self._hovered = True
@@ -382,10 +376,8 @@ class FolderCard(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
 
         if self._hovered:
-            palette = self.palette()
-            hover_color = palette.color(QPalette.Window)
-            hover_alpha = int(hover_color.alpha() * 0.15)
-            painter.fillRect(self.rect(), QColor(hover_color.red(), hover_color.green(), hover_color.blue(), hover_alpha))
+            # Subtle blue highlight on hover — visible on both light and dark backgrounds
+            painter.fillRect(self.rect(), QColor(100, 149, 237, 40))
 
         painter.setPen(Qt.NoPen)
         painter.end()
@@ -414,8 +406,7 @@ class SourcePanel(QWidget):
         self._folders: list[str] = []
         self.setAcceptDrops(True)
         self._pending_count = 0
-        self._hovered = False
-
+        self.setAutoFillBackground(True)
         root = QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(4)
@@ -436,9 +427,7 @@ class SourcePanel(QWidget):
         add_btn.setCursor(Qt.PointingHandCursor)
         add_btn.clicked.connect(self._browse)
         header_row.addWidget(add_btn)
-        # Enable hover tracking on the panel itself
-        self.setMouseTracking(True)
-        self.setAttribute(Qt.WA_Hover, True)
+        root.addLayout(header_row)
 
         self._total_label = QLabel("")
         small_font = QFont()
@@ -463,29 +452,6 @@ class SourcePanel(QWidget):
         self._scroll.setWidget(self._card_container)
         root.addWidget(self._scroll)
         root.addStretch()
-
-    def enterEvent(self, event):
-        self._hovered = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._hovered = False
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        if self._hovered:
-            palette = self.palette()
-            hover_color = palette.color(QPalette.Window)
-            hover_alpha = int(hover_color.alpha() * 0.15)
-            painter.fillRect(self.rect(), QColor(hover_color.red(), hover_color.green(), hover_color.blue(), hover_alpha))
-
-        painter.setPen(Qt.NoPen)
-        painter.end()
 
     def _update_header(self):
         count = len(self._folders)
