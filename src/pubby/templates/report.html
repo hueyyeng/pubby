@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Offload Report</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 40px;
+            color: #333;
+        }
+        h1 { border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .report-meta { color: #666; font-size: 0.9em; margin-bottom: 30px; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 40px;
+            background: white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; font-weight: 600; color: #333; }
+        tr:hover { background-color: #f1f1f1; }
+        .folder-header { background-color: #e9ecef !important; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Offload Report</h1>
+    <div class="report-meta">Generated on {{ report_date }}</div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Source Folder</th>
+                <th>Clips</th>
+                <th>Duration</th>
+                <th>Files</th>
+                <th>Size</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for folder_name, data in folders.items() %}
+            <tr class="folder-header">
+                <td>{{ folder_name }}</td>
+                <td>{{ data.total_clips }}</td>
+                <td>{{ _format_duration(data.total_duration_secs) }}</td>
+                <td>{{ data.total_files }}</td>
+                <td>{{ _format_size(data.total_size_bytes) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <h2>Detailed Clip List</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Format</th>
+                <th>Resolution</th>
+                <th>FPS</th>
+                <th>Duration</th>
+                <th>Size</th>
+                <th>Hash (xxHash64BE)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for folder_name, data in folders.items() %}
+                {% for file in data.files %}
+                <tr>
+                    <td>{{ file.name }}</td>
+                    <td>{{ file.format }}</td>
+                    <td>{{ file.resolution }}</td>
+                    <td>{{ file.fps }}</td>
+                    <td>{{ file.duration }}</td>
+                    <td>{{ file.size }}</td>
+                    <td style="font-family: monospace; font-size: 0.85em;">{{ file.hash }}</td>
+                </tr>
+                {% endfor %}
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>
